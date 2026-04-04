@@ -9,7 +9,11 @@ const CATEGORIES = [
   { key: "fund", label: "基金", color: "#a3e635" },
 ];
 
+const NON_CASH = CATEGORIES.filter(c => c.key !== "cash");
+
 const MONTHS = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+
+const DEFAULT_CASH_ACCOUNTS = ["國泰", "玉山", "台新", "新光", "第一銀行"];
 
 const fmt = (n) => {
   if (n === null || n === undefined || n === "") return "";
@@ -24,10 +28,19 @@ const pct = (a, b) => {
 const emptyYear = () => {
   const data = {};
   for (let m = 0; m < 12; m++) {
-    data[m] = {};
-    CATEGORIES.forEach(c => { data[m][c.key] = ""; });
+    data[m] = { cash: {} };
+    NON_CASH.forEach(c => { data[m][c.key] = ""; });
   }
   return data;
+};
+
+// Handle legacy string format and new object format
+const getCashTotal = (md) => {
+  if (!md?.cash) return 0;
+  if (typeof md.cash === "object") {
+    return Object.values(md.cash).reduce((s, v) => s + (Number(v) || 0), 0);
+  }
+  return Number(md.cash) || 0;
 };
 
 const STORAGE_KEY = "asset-tracker-data";
@@ -37,8 +50,12 @@ export default function AssetTracker() {
   const [allData, setAllData] = useState({});
   const [editMonth, setEditMonth] = useState(null);
   const [editValues, setEditValues] = useState({});
+  const [editCashAccounts, setEditCashAccounts] = useState([]);
+  const [newBankInput, setNewBankInput] = useState("");
+  const [showNewBankInput, setShowNewBankInput] = useState(false);
+  const [isAutoFilled, setIsAutoFilled] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState("table"); // table | chart
+  const [view, setView] = useState("table");
   const [saving, setSaving] = useState(false);
 
   // Load
@@ -68,14 +85,17 @@ export default function AssetTracker() {
     setSaving(false);
   }, []);
 
-  const yearData = useMemo(() => {
-    return allData[year] || emptyYear();
-  }, [allData, year]);
+  const cashAccounts = useMemo(
+    () => allData.cashAccounts || DEFAULT_CASH_ACCOUNTS,
+    [allData.cashAccounts]
+  );
+
+  const yearData = useMemo(() => allData[year] || emptyYear(), [allData, year]);
 
   const monthTotal = useCallback((m) => {
     const md = yearData[m];
     if (!md) return 0;
-    return CATEGORIES.reduce((sum, c) => sum + (Number(md[c.key]) || 0), 0);
+    return getCashTotal(md) + NON_CASH.reduce((s, c) => s + (Number(md[c.key]) || 0), 0);
   }, [yearData]);
 
   const chartData = useMemo(() => {
@@ -84,7 +104,7 @@ export default function AssetTracker() {
       const entry = { name: label };
       let total = 0;
       CATEGORIES.forEach(c => {
-        const v = Number(md[c.key]) || 0;
+        const v = c.key === "cash" ? getCashTotal(md) : (Number(md[c.key]) || 0);
         entry[c.key] = v || null;
         total += v;
       });
@@ -94,13 +114,11 @@ export default function AssetTracker() {
   }, [yearData]);
 
   const pieData = useMemo(() => {
-    // Use latest month with data
     for (let i = 11; i >= 0; i--) {
-      const t = monthTotal(i);
-      if (t > 0) {
+      if (monthTotal(i) > 0) {
         return CATEGORIES.map(c => ({
           name: c.label,
-          value: Number(yearData[i]?.[c.key]) || 0,
+          value: c.key === "cash" ? getCashTotal(yearData[i]) : (Number(yearData[i]?.[c.key]) || 0),
           color: c.color,
         })).filter(d => d.value > 0);
       }
@@ -109,9 +127,7 @@ export default function AssetTracker() {
   }, [yearData, monthTotal]);
 
   const latestMonthLabel = useMemo(() => {
-    for (let i = 11; i >= 0; i--) {
-      if (monthTotal(i) > 0) return MONTHS[i];
-    }
+    for (let i = 11; i >= 0; i--) if (monthTotal(i) > 0) return MONTHS[i];
     return null;
   }, [monthTotal]);
 
@@ -123,17 +139,39 @@ export default function AssetTracker() {
     return { from: MONTHS[first], to: MONTHS[last], pct: pct(monthTotal(last), monthTotal(first)) };
   }, [monthTotal]);
 
+  const getPrevMonthData = useCallback((m) => {
+    if (m > 0) return yearData[m - 1];
+    return allData[year - 1]?.[11] ?? null;
+  }, [yearData, allData, year]);
+
   const openEdit = (m) => {
     const md = yearData[m] || {};
-    const vals = {};
-    CATEGORIES.forEach(c => { vals[c.key] = md[c.key] ?? ""; });
+    const prevMd = getPrevMonthData(m) || {};
+    const accounts = allData.cashAccounts || DEFAULT_CASH_ACCOUNTS;
+
+    const currentHasData = getCashTotal(md) > 0 || NON_CASH.some(c => Number(md[c.key]) > 0);
+    const prevHasData = getCashTotal(prevMd) > 0 || NON_CASH.some(c => Number(prevMd[c.key]) > 0);
+    const autoFill = !currentHasData && prevHasData;
+
+    const sourceMd = autoFill ? prevMd : md;
+    const sourceCash = typeof sourceMd.cash === "object" ? sourceMd.cash : {};
+
+    const vals = { cash: {} };
+    accounts.forEach(bank => { vals.cash[bank] = sourceCash[bank] ?? ""; });
+    NON_CASH.forEach(c => { vals[c.key] = sourceMd[c.key] ?? ""; });
+
+    setIsAutoFilled(autoFill);
+    setEditCashAccounts([...accounts]);
     setEditValues(vals);
     setEditMonth(m);
+    setShowNewBankInput(false);
+    setNewBankInput("");
   };
 
   const saveEdit = async () => {
     const updated = { ...allData };
     if (!updated[year]) updated[year] = emptyYear();
+    updated.cashAccounts = editCashAccounts;
     updated[year][editMonth] = { ...editValues };
     setAllData(updated);
     setEditMonth(null);
@@ -143,7 +181,8 @@ export default function AssetTracker() {
   const clearMonth = async (m) => {
     const updated = { ...allData };
     if (updated[year]) {
-      CATEGORIES.forEach(c => { updated[year][m][c.key] = ""; });
+      updated[year][m] = { cash: {} };
+      NON_CASH.forEach(c => { updated[year][m][c.key] = ""; });
       setAllData(updated);
       await persist(updated);
     }
@@ -152,10 +191,31 @@ export default function AssetTracker() {
   const resetAll = async () => {
     if (!confirm("確定要清除所有資料嗎？此操作無法復原。")) return;
     setAllData({});
-    try {
-      await fetch('/api/data', { method: 'DELETE' });
-    } catch {}
+    try { await fetch('/api/data', { method: 'DELETE' }); } catch {}
   };
+
+  const addBank = () => {
+    const name = newBankInput.trim();
+    if (!name || editCashAccounts.includes(name)) return;
+    setEditCashAccounts(prev => [...prev, name]);
+    setEditValues(prev => ({ ...prev, cash: { ...prev.cash, [name]: "" } }));
+    setNewBankInput("");
+    setShowNewBankInput(false);
+  };
+
+  const removeBank = (name) => {
+    setEditCashAccounts(prev => prev.filter(b => b !== name));
+    setEditValues(prev => {
+      const cash = { ...prev.cash };
+      delete cash[name];
+      return { ...prev, cash };
+    });
+  };
+
+  const editTotal = useMemo(() => {
+    const cashSum = Object.values(editValues.cash || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+    return cashSum + NON_CASH.reduce((s, c) => s + (Number(editValues[c.key]) || 0), 0);
+  }, [editValues]);
 
   if (loading) {
     return (
@@ -170,7 +230,6 @@ export default function AssetTracker() {
     <div style={styles.root}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
-      {/* Header */}
       <header style={styles.header}>
         <div style={styles.headerInner}>
           <div>
@@ -182,7 +241,6 @@ export default function AssetTracker() {
       </header>
 
       <div style={styles.container}>
-        {/* Year selector + view toggle */}
         <div style={styles.toolbar}>
           <div style={styles.yearSelector}>
             <button style={styles.yearBtn} onClick={() => setYear(y => y - 1)}>◀</button>
@@ -195,7 +253,6 @@ export default function AssetTracker() {
           </div>
         </div>
 
-        {/* Summary cards */}
         <div style={styles.summaryRow}>
           {annualGrowth && (
             <div style={styles.summaryCard}>
@@ -215,51 +272,71 @@ export default function AssetTracker() {
         </div>
 
         {view === "table" ? (
-          <>
-            {/* Mobile-friendly card list */}
-            <div style={styles.monthGrid}>
-              {MONTHS.map((label, i) => {
-                const total = monthTotal(i);
-                const prevTotal = i > 0 ? monthTotal(i - 1) : 0;
-                const growth = i > 0 && prevTotal > 0 ? pct(total, prevTotal) : null;
-                const hasData = total > 0;
-                return (
-                  <div key={i} style={{...styles.monthCard, ...(hasData ? styles.monthCardFilled : {})}} onClick={() => openEdit(i)}>
-                    <div style={styles.monthCardHeader}>
-                      <span style={styles.monthLabel}>{label}</span>
-                      {growth && (
-                        <span style={{...styles.growthBadge, color: growth.startsWith("-") ? "#f87171" : "#2dd4bf"}}>
-                          {growth}
-                        </span>
-                      )}
-                    </div>
-                    {hasData ? (
-                      <>
-                        <div style={styles.monthTotal}>${fmt(total)}</div>
-                        <div style={styles.monthBreakdown}>
-                          {CATEGORIES.map(c => {
-                            const v = Number(yearData[i]?.[c.key]) || 0;
-                            if (!v) return null;
-                            return (
-                              <div key={c.key} style={styles.breakdownItem}>
-                                <span style={{...styles.dot, backgroundColor: c.color}} />
-                                <span style={styles.breakdownLabel}>{c.label}</span>
-                                <span style={styles.breakdownValue}>${fmt(v)}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </>
-                    ) : (
-                      <div style={styles.emptyMonth}>點擊填寫</div>
+          <div style={styles.monthGrid}>
+            {MONTHS.map((label, i) => {
+              const total = monthTotal(i);
+              const prevTotal = i > 0 ? monthTotal(i - 1) : 0;
+              const growth = i > 0 && prevTotal > 0 ? pct(total, prevTotal) : null;
+              const hasData = total > 0;
+              const cashMd = yearData[i]?.cash;
+              return (
+                <div key={i} style={{...styles.monthCard, ...(hasData ? styles.monthCardFilled : {})}} onClick={() => openEdit(i)}>
+                  <div style={styles.monthCardHeader}>
+                    <span style={styles.monthLabel}>{label}</span>
+                    {growth && (
+                      <span style={{...styles.growthBadge, color: growth.startsWith("-") ? "#f87171" : "#2dd4bf"}}>
+                        {growth}
+                      </span>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          </>
+                  {hasData ? (
+                    <>
+                      <div style={styles.monthTotal}>${fmt(total)}</div>
+                      <div style={styles.monthBreakdown}>
+                        {CATEGORIES.map(c => {
+                          if (c.key === "cash") {
+                            const cashTotal = getCashTotal(yearData[i]);
+                            if (!cashTotal) return null;
+                            return (
+                              <div key="cash">
+                                <div style={styles.breakdownItem}>
+                                  <span style={{...styles.dot, backgroundColor: c.color}} />
+                                  <span style={styles.breakdownLabel}>{c.label}</span>
+                                  <span style={styles.breakdownValue}>${fmt(cashTotal)}</span>
+                                </div>
+                                {typeof cashMd === "object" && cashAccounts.map(bank => {
+                                  const v = Number(cashMd[bank]) || 0;
+                                  if (!v) return null;
+                                  return (
+                                    <div key={bank} style={styles.breakdownSubItem}>
+                                      <span style={styles.breakdownSubLabel}>{bank}</span>
+                                      <span style={styles.breakdownValue}>${fmt(v)}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
+                          const v = Number(yearData[i]?.[c.key]) || 0;
+                          if (!v) return null;
+                          return (
+                            <div key={c.key} style={styles.breakdownItem}>
+                              <span style={{...styles.dot, backgroundColor: c.color}} />
+                              <span style={styles.breakdownLabel}>{c.label}</span>
+                              <span style={styles.breakdownValue}>${fmt(v)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={styles.emptyMonth}>點擊填寫</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         ) : (
-          /* Charts */
           <div style={styles.chartSection}>
             <div style={styles.chartCard}>
               <h3 style={styles.chartTitle}>總資產趨勢</h3>
@@ -318,7 +395,6 @@ export default function AssetTracker() {
           </div>
         )}
 
-        {/* Reset */}
         <div style={styles.footerActions}>
           <button style={styles.resetBtn} onClick={resetAll}>清除所有資料</button>
         </div>
@@ -329,8 +405,58 @@ export default function AssetTracker() {
         <div style={styles.overlay} onClick={() => setEditMonth(null)}>
           <div style={styles.modal} onClick={e => e.stopPropagation()}>
             <h2 style={styles.modalTitle}>{year} 年 {MONTHS[editMonth]}</h2>
-            <p style={styles.modalHint}>填入該月底各項資產的市值（新台幣）</p>
-            {CATEGORIES.map(c => (
+            {isAutoFilled ? (
+              <p style={styles.autoFillNote}>已自動帶入上個月數值，請確認後儲存</p>
+            ) : (
+              <p style={styles.modalHint}>填入該月底各項資產的市值（新台幣）</p>
+            )}
+
+            {/* Cash section with bank breakdown */}
+            <div style={styles.fieldGroup}>
+              <label style={styles.fieldLabel}>
+                <span style={{...styles.dot, backgroundColor: "#2dd4bf"}} />
+                現金/活存
+              </label>
+              {editCashAccounts.map(bank => (
+                <div key={bank} style={styles.bankBlock}>
+                  <div style={styles.bankHeader}>
+                    <span style={styles.bankName}>{bank}</span>
+                    <button style={styles.removeBankBtn} onClick={() => removeBank(bank)}>×</button>
+                  </div>
+                  <div style={styles.inputWrap}>
+                    <span style={styles.inputPrefix}>$</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      style={styles.input}
+                      placeholder="0"
+                      value={editValues.cash?.[bank] ?? ""}
+                      onChange={e => setEditValues(v => ({ ...v, cash: { ...v.cash, [bank]: e.target.value } }))}
+                      onFocus={e => e.target.select()}
+                    />
+                  </div>
+                </div>
+              ))}
+              {showNewBankInput ? (
+                <div style={styles.addBankRow}>
+                  <input
+                    style={styles.bankNameInput}
+                    placeholder="銀行名稱"
+                    value={newBankInput}
+                    onChange={e => setNewBankInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") addBank(); if (e.key === "Escape") { setShowNewBankInput(false); setNewBankInput(""); } }}
+                    autoFocus
+                  />
+                  <button style={styles.addBankConfirmBtn} onClick={addBank}>新增</button>
+                  <button style={styles.cancelSmallBtn} onClick={() => { setShowNewBankInput(false); setNewBankInput(""); }}>取消</button>
+                </div>
+              ) : (
+                <button style={styles.addBankBtn} onClick={() => setShowNewBankInput(true)}>＋ 新增銀行</button>
+              )}
+            </div>
+
+            {/* Other categories */}
+            {NON_CASH.map(c => (
               <div key={c.key} style={styles.fieldGroup}>
                 <label style={styles.fieldLabel}>
                   <span style={{...styles.dot, backgroundColor: c.color}} />
@@ -350,8 +476,9 @@ export default function AssetTracker() {
                 </div>
               </div>
             ))}
+
             <div style={styles.modalTotal}>
-              合計：<strong>${fmt(CATEGORIES.reduce((s, c) => s + (Number(editValues[c.key]) || 0), 0))}</strong>
+              合計：<strong>${fmt(editTotal)}</strong>
             </div>
             <div style={styles.modalActions}>
               <button style={styles.cancelBtn} onClick={() => setEditMonth(null)}>取消</button>
@@ -568,8 +695,20 @@ const styles = {
     gap: 6,
     fontSize: 12,
   },
+  breakdownSubItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 11,
+    paddingLeft: 14,
+    marginTop: 2,
+  },
   breakdownLabel: {
     color: "#94a3b8",
+    flex: 1,
+  },
+  breakdownSubLabel: {
+    color: "#64748b",
     flex: 1,
   },
   breakdownValue: {
@@ -634,7 +773,6 @@ const styles = {
     fontSize: 12,
     fontFamily: "'Noto Sans TC', sans-serif",
   },
-  // Modal
   overlay: {
     position: "fixed",
     inset: 0,
@@ -653,6 +791,8 @@ const styles = {
     padding: "28px 24px",
     width: "100%",
     maxWidth: 380,
+    maxHeight: "90vh",
+    overflowY: "auto",
     boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
   },
   modalTitle: {
@@ -666,6 +806,12 @@ const styles = {
     color: "#64748b",
     margin: "0 0 20px",
   },
+  autoFillNote: {
+    fontSize: 12,
+    color: "#2dd4bf",
+    margin: "0 0 20px",
+    opacity: 0.85,
+  },
   fieldGroup: {
     marginBottom: 14,
   },
@@ -677,6 +823,81 @@ const styles = {
     fontWeight: 500,
     color: "#94a3b8",
     marginBottom: 6,
+  },
+  // Bank sub-fields
+  bankBlock: {
+    marginBottom: 8,
+  },
+  bankHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  bankName: {
+    fontSize: 12,
+    color: "#64748b",
+    paddingLeft: 2,
+  },
+  removeBankBtn: {
+    background: "transparent",
+    border: "none",
+    color: "#475569",
+    cursor: "pointer",
+    fontSize: 14,
+    lineHeight: 1,
+    padding: "0 2px",
+    fontFamily: "sans-serif",
+  },
+  addBankBtn: {
+    background: "transparent",
+    border: "1px dashed #334155",
+    color: "#475569",
+    borderRadius: 8,
+    padding: "6px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "'Noto Sans TC', sans-serif",
+    width: "100%",
+    marginTop: 4,
+  },
+  addBankRow: {
+    display: "flex",
+    gap: 6,
+    marginTop: 6,
+  },
+  bankNameInput: {
+    flex: 1,
+    background: "#0f172a",
+    border: "1px solid #334155",
+    borderRadius: 8,
+    padding: "8px 10px",
+    color: "#e2e8f0",
+    fontSize: 13,
+    outline: "none",
+    fontFamily: "'Noto Sans TC', sans-serif",
+  },
+  addBankConfirmBtn: {
+    background: "#2dd4bf22",
+    border: "1px solid #2dd4bf55",
+    color: "#2dd4bf",
+    borderRadius: 8,
+    padding: "8px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "'Noto Sans TC', sans-serif",
+    whiteSpace: "nowrap",
+  },
+  cancelSmallBtn: {
+    background: "transparent",
+    border: "1px solid #334155",
+    color: "#64748b",
+    borderRadius: 8,
+    padding: "8px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "'Noto Sans TC', sans-serif",
+    whiteSpace: "nowrap",
   },
   inputWrap: {
     display: "flex",
