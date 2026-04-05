@@ -30,7 +30,22 @@ The original `asset-tracker.jsx` at the root is the pre-migration source; `src/A
 - `POST` `{ value: string }` → saves serialized data
 - `DELETE` → clears all data
 
-**Storage shape:** The entire app state is stored as a single JSON string in D1's `kv` table under key `"asset-tracker-data"`. Shape: `{ [year]: { [monthIndex 0–11]: { cash, insurance, stock, etf, fund } } }`.
+**Storage shape:** The entire app state is stored as a single JSON string in D1's `kv` table under key `"asset-tracker-data"`. Shape:
+```
+{
+  cashAccounts: [{ name: string, currency: "TWD"|"USD"|"AUD"|"JPY" }],
+  [year]: {
+    [monthIndex 0–11]: {
+      cash: { [accountName]: number },  // keyed by cashAccounts[].name
+      insurance: number,
+      stock: number,
+      stockUS: number,   // USD amount, converted to TWD at runtime
+      fund: number,
+      etf: number
+    }
+  }
+}
+```
 
 **Asset categories** are defined in the `CATEGORIES` constant in `AssetTracker.jsx`. Adding a category there propagates to all UI and storage automatically.
 
