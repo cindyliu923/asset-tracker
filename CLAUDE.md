@@ -8,8 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install          # install dependencies
 npm run dev          # local dev server (Vite + Pages Functions + D1)
 npm run build        # build to dist/
-npm run deploy       # build + deploy to Cloudflare Pages
+npm run deploy       # build + deploy to Cloudflare Pages (manual, from a local machine)
 ```
+
+**CI deploy:** `.github/workflows/deploy.yml` deploys to the `asset-tracker` Pages project on every push to `main` (or manually via "Run workflow"). Requires repo secrets `CLOUDFLARE_API_TOKEN` (Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`. The D1 binding comes from the Pages project settings, since `wrangler.toml` is gitignored.
 
 ## Architecture
 
