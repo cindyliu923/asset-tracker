@@ -41,7 +41,9 @@ The original `asset-tracker.jsx` at the root is the pre-migration source; `src/A
       stock: number,
       stockUS: number,   // USD amount, converted to TWD at runtime
       fund: number,
-      etf: number
+      etf: number,
+      createdAt?: string, // ISO timestamp, set when the month is first saved
+      updatedAt?: string  // ISO timestamp, set on every save
     }
   }
 }

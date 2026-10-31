@@ -33,6 +33,15 @@ const pct = (a, b) => {
   return ((a - b) / b * 100).toFixed(1) + "%";
 };
 
+// Format an ISO timestamp as "2026/10/31 14:20" (local time)
+const fmtDateTime = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 const emptyYear = () => {
   const data = {};
   for (let m = 0; m < 12; m++) {
@@ -226,7 +235,17 @@ export default function AssetTracker() {
     const updated = { ...allData };
     if (!updated[year]) updated[year] = emptyYear();
     updated.cashAccounts = editCashAccounts;
-    updated[year][editMonth] = { ...editValues, etf: "" }; // clear legacy etf
+    const prev = updated[year][editMonth] || {};
+    const now  = new Date().toISOString();
+    // createdAt: set only when the month is first filled; legacy months that
+    // already had data keep it unset since their real creation time is unknown.
+    const createdAt = prev.createdAt || (monthTotal(editMonth) > 0 ? undefined : now);
+    updated[year][editMonth] = {
+      ...editValues,
+      etf: "", // clear legacy etf
+      ...(createdAt ? { createdAt } : {}),
+      updatedAt: now,
+    };
     setAllData(updated);
     setEditMonth(null);
     await persist(updated);
@@ -359,6 +378,11 @@ export default function AssetTracker() {
                   {hasData ? (
                     <>
                       <div style={styles.monthTotal}>${fmt(Math.round(total))}</div>
+                      {(md.createdAt || md.updatedAt) && (
+                        <div style={styles.monthTimestamp}>
+                          {md.createdAt ? `新增於 ${fmtDateTime(md.createdAt)}` : `更新於 ${fmtDateTime(md.updatedAt)}`}
+                        </div>
+                      )}
                       <div style={styles.monthBreakdown}>
                         {/* Cash */}
                         {(() => {
@@ -493,6 +517,14 @@ export default function AssetTracker() {
         <div style={styles.overlay} onClick={() => setEditMonth(null)}>
           <div style={styles.modal} onClick={e => e.stopPropagation()}>
             <h2 style={styles.modalTitle}>{year} 年 {MONTHS[editMonth]}</h2>
+            {(yearData[editMonth]?.createdAt || yearData[editMonth]?.updatedAt) && (
+              <div style={styles.modalTimestamps}>
+                {yearData[editMonth]?.createdAt && <span>新增於 {fmtDateTime(yearData[editMonth].createdAt)}</span>}
+                {yearData[editMonth]?.updatedAt && yearData[editMonth].updatedAt !== yearData[editMonth].createdAt && (
+                  <span>最後更新 {fmtDateTime(yearData[editMonth].updatedAt)}</span>
+                )}
+              </div>
+            )}
             {isAutoFilled
               ? <p style={styles.autoFillNote}>已自動帶入上個月數值，請確認後儲存</p>
               : <p style={styles.modalHint}>填入該月底各項資產的市值</p>
@@ -864,6 +896,23 @@ const styles = {
     borderRadius: "50%",
     display: "inline-block",
     flexShrink: 0,
+  },
+  monthTimestamp: {
+    fontSize: 11,
+    color: "#64748b",
+    fontFamily: "'JetBrains Mono', monospace",
+    marginTop: 2,
+    marginBottom: 6,
+  },
+  modalTimestamps: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "4px 12px",
+    fontSize: 12,
+    color: "#64748b",
+    fontFamily: "'JetBrains Mono', monospace",
+    marginTop: -2,
+    marginBottom: 8,
   },
   emptyMonth: {
     color: "#475569",
