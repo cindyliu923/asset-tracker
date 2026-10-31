@@ -1,0 +1,42 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Deploys dist/ and compiles functions/ into the existing Pages project.
+      # No wrangler.toml in CI: the D1 binding (asset_tracker_db) comes from
+      # the project's settings in the Cloudflare dashboard.
+      # The repo is public, so Actions logs are too: redact *.pages.dev URLs
+      # that wrangler prints. pipefail (from `shell: bash`) keeps failures red.
+      - name: Deploy
+        shell: bash
+        run: |
+          npx wrangler pages deploy dist --project-name=asset-tracker --branch=main 2>&1 \
+            | sed -E 's#[A-Za-z0-9.-]+\.pages\.dev#<redacted>.pages.dev#g'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
